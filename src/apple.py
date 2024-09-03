@@ -9,7 +9,7 @@ app = FastAPI()
 pg_host = os.getenv("DB_HOST", "localhost")
 pg_database = os.getenv("DB_NAME", "postgres")
 pg_user = os.getenv("DB_USER", "postgres")
-pg_password = (os.getenv("DB_PASSWORD", "postgres"),)
+pg_password = os.getenv("DB_PASSWORD", "postgres")
 
 logging.basicConfig(
     level=logging.INFO,
