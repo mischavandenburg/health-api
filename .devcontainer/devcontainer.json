@@ -1,7 +1,7 @@
 {
   "name": "Python 3 & PostgreSQL",
   "dockerComposeFile": "docker-compose.yml",
-  "service": "app",
+  "service": "devcontainer",
   "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
   "features": {
     "ghcr.io/devcontainers-contrib/features/poetry:2": {},
@@ -17,5 +17,7 @@
       }
     }
   },
-  "forwardPorts": [5000, 5432, 8000]
+  "remoteEnv": {
+    "REMOTE_CONTAINERS": "true"
+  }
 }
