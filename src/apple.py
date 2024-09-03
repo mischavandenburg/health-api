@@ -1,8 +1,11 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, RootModel
 import psycopg
 from datetime import datetime
 import os
 import logging
+from typing import Any
 
 app = FastAPI()
 
@@ -71,6 +74,15 @@ async def add_dietary_energy(data: dict):
         return {"message": "Data processed successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class AnyJSON(RootModel):
+    root: Any
+
+@app.post("/echo/")
+async def echo(data: AnyJSON):
+    logger.info(data.root)
+    return JSONResponse(content=data.root)
 
 
 if __name__ == "__main__":
