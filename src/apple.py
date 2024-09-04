@@ -124,7 +124,6 @@ def process_metrics(metrics: List[Metric], allowed_metrics: List[str], table_nam
                 processed_count += 1
 
         logger.info(f"Processed {processed_count} metrics for {table_name}")
-        logger.debug(f"Metrics data: {json.dumps(metrics_data, default=str)}")
 
         with create_pg_connection() as conn:
             with conn.cursor() as cur:
