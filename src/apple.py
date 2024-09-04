@@ -47,7 +47,8 @@ def create_tables():
                     date DATE PRIMARY KEY,
                     lean_body_mass FLOAT,
                     body_mass_index FLOAT,
-                    weight_body_mass FLOAT
+                    weight_body_mass FLOAT,
+                    body_fat_percentage FLOAT
                 )
             """)
         conn.commit()
