@@ -108,6 +108,7 @@ async def add_body_composition(data: dict):
                 "lean_body_mass",
                 "body_mass_index",
                 "weight_body_mass",
+                "body_fat_percentage",
             ]:
                 for data_point in metric["data"]:
                     date = datetime.strptime(
@@ -127,18 +128,20 @@ async def add_body_composition(data: dict):
                     cur.execute(
                         """
                         INSERT INTO body_composition 
-                        (date, lean_body_mass, body_mass_index, weight_body_mass)
-                        VALUES (%s, %s, %s, %s)
+                        (date, lean_body_mass, body_mass_index, weight_body_mass, body_fat_percentage)
+                        VALUES (%s, %s, %s, %s, %s)
                         ON CONFLICT (date) DO UPDATE
                         SET lean_body_mass = EXCLUDED.lean_body_mass,
                             body_mass_index = EXCLUDED.body_mass_index,
                             weight_body_mass = EXCLUDED.weight_body_mass
+                            body_fat_percentage = EXCLUDED.body_fat_percentage
                         """,
                         (
                             date,
                             metrics["lean_body_mass"],
                             metrics["body_mass_index"],
                             metrics["weight_body_mass"],
+                            metrics["body_fat_percentage"],
                         ),
                     )
             conn.commit()
@@ -168,4 +171,3 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(app, host="0.0.0.0", port=8000)
-
