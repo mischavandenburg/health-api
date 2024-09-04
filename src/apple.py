@@ -122,7 +122,7 @@ async def add_body_composition(data: dict):
         with create_pg_connection() as conn:
             with conn.cursor() as cur:
                 for date, metrics in body_comp_data.items():
-                    if len(metrics) != 3:
+                    if len(metrics) != 4:
                         logger.warning(f"Incomplete data for date {date}: {metrics}")
                         continue
 
@@ -134,7 +134,7 @@ async def add_body_composition(data: dict):
                         ON CONFLICT (date) DO UPDATE
                         SET lean_body_mass = EXCLUDED.lean_body_mass,
                             body_mass_index = EXCLUDED.body_mass_index,
-                            weight_body_mass = EXCLUDED.weight_body_mass
+                            weight_body_mass = EXCLUDED.weight_body_mass,
                             body_fat_percentage = EXCLUDED.body_fat_percentage
                         """,
                         (
