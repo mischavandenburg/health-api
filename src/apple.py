@@ -1,13 +1,15 @@
 import os
 import logging
-from typing import Any
-from datetime import datetime
+import json
+from typing import Any, Dict, List
+from datetime import datetime, date
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import RootModel
+from pydantic import BaseModel, RootModel
 
 import psycopg
+from psycopg.sql import SQL, Identifier, Placeholder
 
 app = FastAPI()
 
@@ -16,12 +18,22 @@ pg_database = os.getenv("DB_NAME", "postgres")
 pg_user = os.getenv("DB_USER", "postgres")
 pg_password = os.getenv("DB_PASSWORD", "postgres")
 
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+# Define metric types for each category
+DIET_METRICS = ["dietary_energy"]
+BODY_COMPOSITION_METRICS = [
+    "lean_body_mass",
+    "body_mass_index",
+    "weight_body_mass",
+    "body_fat_percentage",
+]
 
 
 def create_pg_connection():
@@ -34,6 +46,7 @@ def create_pg_connection():
 
 def create_tables():
     """Create necessary tables if they don't exist."""
+    logger.info("Creating tables if they don't exist")
     with create_pg_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -52,104 +65,160 @@ def create_tables():
                 )
             """)
         conn.commit()
+    logger.info("Tables created successfully")
 
 
 create_tables()
 
 
-@app.post("/dietary-energy/")
-async def add_dietary_energy(data: dict):
-    """
-    Add dietary energy data to the database.
+class MetricData(BaseModel):
+    date: str
+    qty: float
 
-    :param data: Dictionary containing dietary energy data
-    :return: JSON response indicating success or failure
+
+class Metric(BaseModel):
+    name: str
+    data: List[MetricData]
+
+
+class HealthData(BaseModel):
+    metrics: List[Metric]
+
+
+class HealthDataWrapper(BaseModel):
+    data: HealthData
+
+
+def process_metrics(metrics: List[Metric], allowed_metrics: List[str], table_name: str):
     """
+    Process metrics and insert/update them in the database.
+
+    :param metrics: List of metrics to process
+    :param allowed_metrics: List of metric names allowed for this table
+    :param table_name: Name of the table to insert/update data
+    :return: Number of processed metrics
+    """
+    processed_count = 0
+    metrics_data: Dict[date, Dict[str, float]] = {}
+
     try:
-        metrics = data.get("data", {}).get("metrics", [])
         for metric in metrics:
-            if metric["name"] == "dietary_energy":
-                for data_point in metric["data"]:
-                    date = datetime.strptime(
-                        data_point["date"], "%Y-%m-%d %H:%M:%S %z"
-                    ).date()
-                    energy_kj = data_point["qty"]
-                    energy_kcal = energy_kj / 4.184  # Convert kJ to kcal
-                    with create_pg_connection() as conn:
-                        with conn.cursor() as cur:
-                            cur.execute(
-                                """
-                                INSERT INTO diet (date, dietary_energy)
-                                VALUES (%s, %s)
-                                ON CONFLICT (date) DO UPDATE
-                                SET dietary_energy = EXCLUDED.dietary_energy
-                                """,
-                                (date, energy_kcal),
-                            )
-                        conn.commit()
-        return {"message": "Dietary energy data processed successfully"}
-    except Exception as e:
-        logger.error(f"Error processing dietary energy data: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+            if metric.name not in allowed_metrics:
+                logger.warning(
+                    f"Skipping unknown metric type for {table_name}: {metric.name}"
+                )
+                continue
 
+            for data_point in metric.data:
+                metric_date = datetime.strptime(
+                    data_point.date, "%Y-%m-%d %H:%M:%S %z"
+                ).date()
+                if metric_date not in metrics_data:
+                    metrics_data[metric_date] = {}
 
-@app.post("/body-composition/")
-async def add_body_composition(data: dict):
-    """
-    Add body composition data to the database.
+                value = data_point.qty
+                if metric.name == "dietary_energy":
+                    value /= 4.184  # Convert kJ to kcal
 
-    :param data: Dictionary containing body composition data
-    :return: JSON response indicating success or failure
-    """
-    try:
-        metrics = data.get("data", {}).get("metrics", [])
-        body_comp_data = {}
-        for metric in metrics:
-            if metric["name"] in [
-                "lean_body_mass",
-                "body_mass_index",
-                "weight_body_mass",
-                "body_fat_percentage",
-            ]:
-                for data_point in metric["data"]:
-                    date = datetime.strptime(
-                        data_point["date"], "%Y-%m-%d %H:%M:%S %z"
-                    ).date()
-                    if date not in body_comp_data:
-                        body_comp_data[date] = {}
-                    body_comp_data[date][metric["name"]] = data_point["qty"]
+                metrics_data[metric_date][metric.name] = value
+                processed_count += 1
+
+        logger.info(f"Processed {processed_count} metrics for {table_name}")
+        logger.debug(f"Metrics data: {json.dumps(metrics_data, default=str)}")
 
         with create_pg_connection() as conn:
             with conn.cursor() as cur:
-                for date, metrics in body_comp_data.items():
-                    if len(metrics) != 4:
-                        logger.warning(f"Incomplete data for date {date}: {metrics}")
-                        continue
+                for metric_date, date_metrics in metrics_data.items():
+                    columns = list(date_metrics.keys())
+                    placeholders = [Placeholder()] * len(columns)
+                    values = [metric_date] + list(date_metrics.values())
 
-                    cur.execute(
-                        """
-                        INSERT INTO body_composition 
-                        (date, lean_body_mass, body_mass_index, weight_body_mass, body_fat_percentage)
-                        VALUES (%s, %s, %s, %s, %s)
-                        ON CONFLICT (date) DO UPDATE
-                        SET lean_body_mass = EXCLUDED.lean_body_mass,
-                            body_mass_index = EXCLUDED.body_mass_index,
-                            weight_body_mass = EXCLUDED.weight_body_mass,
-                            body_fat_percentage = EXCLUDED.body_fat_percentage
-                        """,
-                        (
-                            date,
-                            metrics["lean_body_mass"],
-                            metrics["body_mass_index"],
-                            metrics["weight_body_mass"],
-                            metrics["body_fat_percentage"],
+                    query = SQL("""
+                    INSERT INTO {table} (date, {columns})
+                    VALUES (%s, {placeholders})
+                    ON CONFLICT (date) DO UPDATE
+                    SET {updates}
+                    """).format(
+                        table=Identifier(table_name),
+                        columns=SQL(", ").join(map(Identifier, columns)),
+                        placeholders=SQL(", ").join(placeholders),
+                        updates=SQL(", ").join(
+                            SQL("{} = EXCLUDED.{}").format(
+                                Identifier(col), Identifier(col)
+                            )
+                            for col in columns
                         ),
                     )
+
+                    try:
+                        cur.execute(query, values)
+                        logger.info(
+                            f"Successfully inserted/updated data for date {metric_date} in {table_name}"
+                        )
+                    except psycopg.Error as e:
+                        logger.error(
+                            f"Database error while inserting/updating data for date {metric_date} in {table_name}: {str(e)}"
+                        )
+                        logger.error(f"Query: {query.as_string(conn)}")
+                        logger.error(f"Values: {values}")
+                        raise
+
             conn.commit()
-        return {"message": "Body composition data processed successfully"}
+            logger.info(f"Successfully committed all changes for {table_name}")
+
     except Exception as e:
-        logger.error(f"Error processing body composition data: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(
+            f"Unexpected error while processing metrics for {table_name}: {str(e)}"
+        )
+        raise
+
+    return processed_count
+
+
+@app.post("/dietary-energy/")
+async def add_dietary_energy(data: HealthDataWrapper):
+    """
+    Add dietary energy data to the database.
+
+    :param data: HealthDataWrapper containing dietary energy data
+    :return: JSON response indicating success or failure
+    """
+    try:
+        logger.info("Received request to add dietary energy data")
+        processed_count = process_metrics(data.data.metrics, DIET_METRICS, "diet")
+        logger.info(
+            f"Successfully processed {processed_count} dietary energy data points"
+        )
+        return {
+            "message": f"Processed {processed_count} dietary energy data points successfully"
+        }
+    except Exception as e:
+        logger.exception(f"Error processing dietary energy data: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.post("/body-composition/")
+async def add_body_composition(data: HealthDataWrapper):
+    """
+    Add body composition data to the database.
+
+    :param data: HealthDataWrapper containing body composition data
+    :return: JSON response indicating success or failure
+    """
+    try:
+        logger.info("Received request to add body composition data")
+        processed_count = process_metrics(
+            data.data.metrics, BODY_COMPOSITION_METRICS, "body_composition"
+        )
+        logger.info(
+            f"Successfully processed {processed_count} body composition data points"
+        )
+        return {
+            "message": f"Processed {processed_count} body composition data points successfully"
+        }
+    except Exception as e:
+        logger.exception(f"Error processing body composition data: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 class AnyJSON(RootModel):
@@ -164,11 +233,14 @@ async def echo(data: AnyJSON):
     :param data: Any JSON data
     :return: The same JSON data, echoed back
     """
-    logger.info(data.root)
+    logger.info("Received echo request")
+    logger.debug(f"Echo data: {data.root}")
     return JSONResponse(content=data.root)
 
 
 if __name__ == "__main__":
     import uvicorn
 
+    logger.info("Starting the application")
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
